@@ -6,8 +6,8 @@ use debug::DebugPlugin;
 use frame_per_second::FPSDiagPlugin;
 
 const CLEAR: Color = Color::rgb(0.1, 0.1, 0.1);
-const RESOLUTION: f32 = 1.0 / 1.0;
-const HEIGHT: f32 = 800.0;
+const RESOLUTION: f32 = 1.;
+const HEIGHT: f32 = 500.0;
 const WHITE_SQUARE_COLOR: Color = Color::rgb(240. / 255., 217. / 255., 181. / 255.);
 const BLACK_SQUARE_COLOR: Color = Color::rgb(181. / 255., 136. / 255., 99. / 255.);
 const START_COLOR: Color = Color::rgb(0.35, 0.75, 0.35);
@@ -48,48 +48,7 @@ struct SelectingStartSquare;
 #[derive(Debug, Component)]
 struct SelectingEndSquare;
 
-fn main() {
-    App::new()
-        .add_startup_system(spawn_camera)
-        .add_startup_system_to_stage(StartupStage::PreStartup, load_chess_piece_sprites)
-        .add_startup_system_to_stage(StartupStage::Startup, spawn_pieces)
-        .insert_resource(ClearColor(CLEAR))
-        .insert_resource(WinitSettings::desktop_app())
-        .insert_resource(WindowDescriptor {
-            width: HEIGHT * RESOLUTION,
-            height: HEIGHT,
-            title: "Bevy chess by Chop Tr".to_string(),
-            resizable: false,
-            ..Default::default()
-        })
-        .insert_resource(DebugTimer(Timer::from_seconds(2.0, true)))
-        .insert_resource(SelectTimer(Timer::from_seconds(2.0, false)))
-        .add_plugins(DefaultPlugins)
-        .add_plugin(DebugPlugin)
-        .add_plugin(FPSDiagPlugin)
-        .add_system(mouse_select_system)
-        .add_system(highlight_selected)
-        .add_system(handle_chess_move)
-        .run();
-}
-
-fn spawn_camera(mut commands: Commands) {
-    commands.spawn_bundle(Camera2dBundle::default());
-}
-
 struct ChessPieceSprites(Handle<TextureAtlas>);
-
-fn load_chess_piece_sprites(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-) {
-    let image = asset_server.load("chess-pieces.png");
-    let texture_atlas = TextureAtlas::from_grid(image, Vec2::new(106., 106.), 6, 2);
-    let texture_atlas_handle = texture_atlases.add(texture_atlas);
-
-    commands.insert_resource(ChessPieceSprites(texture_atlas_handle));
-}
 
 #[derive(Copy, Clone)]
 enum PieceSprite {
@@ -124,6 +83,47 @@ impl PieceSprite {
             (chess::Piece::Pawn, chess::Color::Black) => Self::BlackPawn,
         }
     }
+}
+
+fn main() {
+    App::new()
+        .add_startup_system(spawn_camera)
+        .add_startup_system_to_stage(StartupStage::PreStartup, load_chess_piece_sprites)
+        .add_startup_system_to_stage(StartupStage::Startup, spawn_pieces)
+        .insert_resource(ClearColor(CLEAR))
+        .insert_resource(WinitSettings::desktop_app())
+        .insert_resource(WindowDescriptor {
+            width: HEIGHT * RESOLUTION,
+            height: HEIGHT,
+            title: "Bevy chess by Chop Tr".to_string(),
+            resizable: false,
+            ..Default::default()
+        })
+        .insert_resource(DebugTimer(Timer::from_seconds(2.0, true)))
+        .insert_resource(SelectTimer(Timer::from_seconds(2.0, false)))
+        .add_plugins(DefaultPlugins)
+        .add_plugin(DebugPlugin)
+        .add_plugin(FPSDiagPlugin)
+        .add_system(mouse_select_system)
+        .add_system(highlight_selected)
+        .add_system(handle_chess_move)
+        .run();
+}
+
+fn spawn_camera(mut commands: Commands) {
+    commands.spawn_bundle(Camera2dBundle::default());
+}
+
+fn load_chess_piece_sprites(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+) {
+    let image = asset_server.load("chess-pieces.png");
+    let texture_atlas = TextureAtlas::from_grid(image, Vec2::new(106., 106.), 6, 2);
+    let texture_atlas_handle = texture_atlases.add(texture_atlas);
+
+    commands.insert_resource(ChessPieceSprites(texture_atlas_handle));
 }
 
 fn translate_square_to_xy(sq: chess::Square) -> (usize, usize) {
@@ -170,6 +170,7 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
     };
 
     let board = chess::Board::default();
+    commands.spawn().insert(BoardComponent { board });
 
     for &sq in chess::ALL_SQUARES.iter() {
         let (x, y) = translate_square_to_xy(sq);
@@ -240,8 +241,6 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
         .spawn()
         .insert(SelectingEndSquare)
         .insert_bundle(spawn_selecting_square(END_COLOR));
-
-    commands.spawn().insert(BoardComponent { board });
 }
 
 fn mouse_select_system(
@@ -264,11 +263,9 @@ fn mouse_select_system(
         match ev.state {
             ButtonState::Pressed => {
                 let position = position.unwrap();
-                let mut piece_size = 0f32;
                 let found_selected = square_query
                     .iter()
                     .find(|&sq| {
-                        piece_size = sq.piece_size;
                         let half_piece = sq.piece_size / 2.;
                         let (bl_x, bl_y) = (
                             sq.bottom_left_coord.x - half_piece,
