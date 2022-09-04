@@ -1,27 +1,46 @@
 mod debug;
 mod frame_per_second;
 
-use bevy::{input::mouse::MouseButtonInput, prelude::*, winit::WinitSettings};
+use bevy::{
+    input::mouse::MouseButtonInput, prelude::*, time::Stopwatch, utils::Duration,
+    winit::WinitSettings,
+};
 use debug::DebugPlugin;
 use frame_per_second::FPSDiagPlugin;
 
 const CLEAR: Color = Color::rgb(0.1, 0.1, 0.1);
 const RESOLUTION: f32 = 1.;
-const HEIGHT: f32 = 500.0;
+const HEIGHT: f32 = 600.0;
+const RIGHT_UI: f32 = 100.0;
 const WHITE_SQUARE_COLOR: Color = Color::rgb(240. / 255., 217. / 255., 181. / 255.);
 const BLACK_SQUARE_COLOR: Color = Color::rgb(181. / 255., 136. / 255., 99. / 255.);
 const START_COLOR: Color = Color::rgb(0.35, 0.75, 0.35);
 const END_COLOR: Color = Color::rgb(0.8, 0.75, 0.35);
 
-// TIMERS
-struct DebugTimer(Timer);
+const FONT_SIZE: f32 = 32.0;
+const FONT_COLOR: Color = Color::WHITE;
 
-struct SelectTimer(Timer);
+const GAME_DURATION: u64 = 60 * 10;
+
+#[derive(Component)]
+pub struct GameState {
+    duration: Duration,
+    white_watch: Stopwatch,
+    black_watch: Stopwatch,
+    is_running: bool,
+}
+
+#[derive(Component)]
+struct StartButton;
+
+#[derive(Component)]
+struct WhiteCountdown;
+
+#[derive(Component)]
+struct BlackCountdown;
 
 #[derive(Debug, Component)]
-struct BoardComponent {
-    board: chess::Board,
-}
+struct BoardComponent(chess::Board);
 
 #[derive(Debug, Component)]
 struct PieceComponent {
@@ -40,6 +59,7 @@ struct SquareComponent {
 struct SelectingSquares {
     start: Option<SquareComponent>,
     end: Option<SquareComponent>,
+    en_passant: Option<SquareComponent>,
 }
 
 #[derive(Debug, Component)]
@@ -90,20 +110,22 @@ fn main() {
         .add_startup_system(spawn_camera)
         .add_startup_system_to_stage(StartupStage::PreStartup, load_chess_piece_sprites)
         .add_startup_system_to_stage(StartupStage::Startup, spawn_pieces)
+        .add_startup_system_to_stage(StartupStage::Startup, spawn_countdowns)
         .insert_resource(ClearColor(CLEAR))
         .insert_resource(WinitSettings::desktop_app())
         .insert_resource(WindowDescriptor {
-            width: HEIGHT * RESOLUTION,
+            width: HEIGHT * RESOLUTION + RIGHT_UI,
             height: HEIGHT,
             title: "Bevy chess by Chop Tr".to_string(),
             resizable: false,
             ..Default::default()
         })
-        .insert_resource(DebugTimer(Timer::from_seconds(2.0, true)))
-        .insert_resource(SelectTimer(Timer::from_seconds(2.0, false)))
         .add_plugins(DefaultPlugins)
         .add_plugin(DebugPlugin)
         .add_plugin(FPSDiagPlugin)
+        .add_system(click_start)
+        .add_system(timer_tick)
+        .add_system(timer_display)
         .add_system(mouse_select_system)
         .add_system(highlight_selected)
         .add_system(handle_chess_move)
@@ -111,7 +133,13 @@ fn main() {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn_bundle(Camera2dBundle::default());
+    commands.spawn_bundle(Camera2dBundle {
+        transform: Transform {
+            translation: Vec3::new(RIGHT_UI / 2., 0., 999.9),
+            ..default()
+        },
+        ..default()
+    });
 }
 
 fn load_chess_piece_sprites(
@@ -148,6 +176,121 @@ fn translate_center_coord_vec_to_bottom_left_vec(v: Vec2, window: &Window) -> Ve
     Vec2::new(v.x + (window.width() / 2.), v.y + (window.height() / 2.))
 }
 
+fn format_duration(dur: &Duration) -> String {
+    let seconds = dur.as_secs() % 60;
+    let minutes = (dur.as_secs() / 60) % 60;
+    let padding_zero = |n: u64| {
+        if n < 10 {
+            format!("0{n}")
+        } else {
+            n.to_string()
+        }
+    };
+    format!("{}:{}", padding_zero(minutes), padding_zero(seconds))
+}
+
+fn spawn_countdowns(windows: Res<Windows>, mut commands: Commands, asset_server: Res<AssetServer>) {
+    let window = windows.get_primary().unwrap();
+    let font = asset_server.load("fonts/FiraMono-Bold.ttf");
+    let text_style = |position: UiRect<Val>| {
+        TextBundle::from_section(
+            format_duration(&Duration::from_secs(0)),
+            TextStyle {
+                font: font.clone(),
+                font_size: FONT_SIZE,
+                color: FONT_COLOR,
+            },
+        )
+        .with_style(Style {
+            align_self: AlignSelf::FlexEnd,
+            position_type: PositionType::Absolute,
+            position,
+            size: Size {
+                width: Val::Px(RIGHT_UI),
+                height: Val::Px(40.),
+                ..default()
+            },
+            ..default()
+        })
+    };
+
+    commands.spawn().insert(GameState {
+        duration: Duration::from_secs(GAME_DURATION),
+        white_watch: Stopwatch::new(),
+        black_watch: Stopwatch::new(),
+        is_running: false,
+    });
+
+    commands
+        .spawn_bundle(ButtonBundle {
+            style: Style {
+                size: Size::new(Val::Px(100.), Val::Px(65.)),
+                margin: UiRect::all(Val::Auto),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                position_type: PositionType::Absolute,
+                position: UiRect {
+                    right: Val::Px(0.),
+                    top: Val::Px((window.height() - 65.) / 2.),
+                    ..default()
+                },
+                ..default()
+            },
+            color: Color::rgb(0.15, 0.15, 0.15).into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn_bundle(TextBundle::from_section(
+                "Start",
+                TextStyle {
+                    font: font.clone(),
+                    font_size: FONT_SIZE,
+                    color: Color::rgb(0.9, 0.9, 0.9),
+                },
+            ));
+        })
+        .insert(Name::new("StartButton"))
+        .insert(StartButton);
+
+    commands
+        .spawn_bundle(text_style(UiRect {
+            bottom: Val::Px(5.0),
+            right: Val::Px(0.),
+            ..default()
+        }))
+        .insert(Name::new("WhiteCountdown"))
+        .insert(WhiteCountdown);
+
+    commands
+        .spawn_bundle(text_style(UiRect {
+            top: Val::Px(5.0),
+            right: Val::Px(0.),
+            ..default()
+        }))
+        .insert(Name::new("BlackCountdown"))
+        .insert(BlackCountdown);
+}
+
+fn click_start(
+    mut commands: Commands,
+    mut interaction_query: Query<
+        (Entity, &Interaction, &Children),
+        (Changed<Interaction>, With<StartButton>),
+    >,
+    mut game_q: Query<&mut GameState>,
+) {
+    for (entity, interaction, children) in &mut interaction_query {
+        if *interaction == Interaction::Clicked {
+            children.iter().for_each(|child| {
+                commands.entity(*child).despawn();
+            });
+            commands.entity(entity).despawn();
+            let mut game = game_q.single_mut();
+            game.is_running = true;
+        }
+    }
+}
+
 fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows: Res<Windows>) {
     let window = windows.get_primary().unwrap();
     let piece_size = window.height() / 8.;
@@ -170,7 +313,7 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
     };
 
     let board = chess::Board::default();
-    commands.spawn().insert(BoardComponent { board });
+    commands.spawn().insert(BoardComponent(board));
 
     for &sq in chess::ALL_SQUARES.iter() {
         let (x, y) = translate_square_to_xy(sq);
@@ -200,18 +343,18 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
                 ..default()
             });
 
-        let pc = board.piece_on(sq);
-        if pc.is_none() {
+        let piece = board.piece_on(sq);
+        if piece.is_none() {
             continue;
         }
-        let pc = pc.unwrap();
+        let piece = piece.unwrap();
         let color = board.color_on(sq).unwrap();
 
         commands
             .spawn()
-            .insert(Name::new(pc.to_string(color)))
+            .insert(Name::new(piece.to_string(color)))
             .insert(PieceComponent { position: vs })
-            .insert_bundle(piece_to_sprite(PieceSprite::from_chess(pc, color), vs));
+            .insert_bundle(piece_to_sprite(PieceSprite::from_chess(piece, color), vs));
     }
 
     commands
@@ -220,6 +363,7 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
         .insert(SelectingSquares {
             start: None,
             end: None,
+            en_passant: None,
         });
 
     let spawn_selecting_square = |color: Color| SpriteBundle {
@@ -243,11 +387,57 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
         .insert_bundle(spawn_selecting_square(END_COLOR));
 }
 
+fn timer_tick(
+    time: Res<Time>,
+    board_q: Query<&mut BoardComponent>,
+    mut game_q: Query<&mut GameState>,
+) {
+    let board = board_q.single();
+    let mut game = game_q.single_mut();
+
+    if !game.is_running {
+        return;
+    }
+
+    if board.0.side_to_move() == chess::Color::White {
+        game.white_watch.tick(time.delta());
+    } else {
+        game.black_watch.tick(time.delta());
+    }
+}
+
+fn timer_display(
+    game_q: Query<&GameState>,
+    mut set: ParamSet<(
+        Query<&mut Text, With<WhiteCountdown>>,
+        Query<&mut Text, With<BlackCountdown>>,
+    )>,
+) {
+    let game = game_q.single();
+    for mut text in set.p0().iter_mut() {
+        text.sections[0].value = format_duration(
+            &game
+                .duration
+                .checked_sub(game.white_watch.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0)),
+        );
+    }
+
+    for mut text in set.p1().iter_mut() {
+        text.sections[0].value = format_duration(
+            &game
+                .duration
+                .checked_sub(game.black_watch.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0)),
+        );
+    }
+}
+
 fn mouse_select_system(
     board_q: Query<&mut BoardComponent>,
-    mut mousebtn_evr: EventReader<MouseButtonInput>,
     windows: Res<Windows>,
     square_query: Query<&SquareComponent>,
+    mut mousebtn_evr: EventReader<MouseButtonInput>,
     mut selected_query: Query<&mut SelectingSquares>,
 ) {
     use bevy::input::ButtonState;
@@ -260,52 +450,54 @@ fn mouse_select_system(
     let board = board_q.single();
 
     for ev in mousebtn_evr.iter() {
-        match ev.state {
-            ButtonState::Pressed => {
-                let position = position.unwrap();
-                let found_selected = square_query
-                    .iter()
-                    .find(|&sq| {
-                        let half_piece = sq.piece_size / 2.;
-                        let (bl_x, bl_y) = (
-                            sq.bottom_left_coord.x - half_piece,
-                            sq.bottom_left_coord.y - half_piece,
-                        );
-                        let (tr_x, tr_y) = (bl_x + sq.piece_size, bl_y + sq.piece_size);
-                        let (pos_x, pos_y) = (position.x, position.y);
-                        bl_x < pos_x && bl_y < pos_y && tr_x > pos_x && tr_y > pos_y
-                    })
-                    .map(|s| s.clone());
-                if found_selected.is_none() {
-                    continue;
+        if ev.state == ButtonState::Pressed {
+            let position = position.unwrap();
+            let found_selected = square_query
+                .iter()
+                .find(|&sq| {
+                    let half_piece = sq.piece_size / 2.;
+                    let (bl_x, bl_y) = (
+                        sq.bottom_left_coord.x - half_piece,
+                        sq.bottom_left_coord.y - half_piece,
+                    );
+                    let (tr_x, tr_y) = (bl_x + sq.piece_size, bl_y + sq.piece_size);
+                    let (pos_x, pos_y) = (position.x, position.y);
+                    let x_padding = RIGHT_UI / 2.;
+                    bl_x < pos_x + x_padding
+                        && bl_y < pos_y
+                        && tr_x > pos_x + x_padding
+                        && tr_y > pos_y
+                })
+                .map(|s| s.clone());
+            if found_selected.is_none() {
+                continue;
+            }
+            let found_selected = found_selected.unwrap();
+            let mut selected = selected_query.single_mut();
+            if selected.start.is_none() {
+                if board.0.piece_on(found_selected.chess_sq).is_some() {
+                    let color = board.0.color_on(found_selected.chess_sq).unwrap();
+                    if color == board.0.side_to_move() {
+                        selected.start = Some(found_selected);
+                    }
                 }
-                let found_selected = found_selected.unwrap();
-                let mut selected = selected_query.single_mut();
-                match (selected.start.as_ref(), selected.end.as_ref()) {
-                    (None, None) => {
-                        if board.board.piece_on(found_selected.chess_sq).is_some() {
-                            selected.start = Some(found_selected);
+            } else {
+                if let Some(en_passant) = board.0.en_passant() {
+                    let en_passant_target = if board.0.side_to_move() == chess::Color::White {
+                        found_selected.chess_sq.down()
+                    } else {
+                        found_selected.chess_sq.up()
+                    };
+                    if let Some(en_passant_target) = en_passant_target {
+                        if en_passant == en_passant_target {
+                            selected.en_passant = square_query
+                                .iter()
+                                .find(|&sq| sq.chess_sq == en_passant)
+                                .map(|sq| sq.clone());
                         }
                     }
-
-                    // Imposible case
-                    (None, Some(_)) => {}
-
-                    (Some(_), None) => {
-                        selected.end = Some(found_selected);
-                    }
-
-                    // Imposible case, handle_chess_move will set this to (None, None)
-                    (Some(_), Some(_)) => {}
                 }
-            }
-            ButtonState::Released => {
-                let selected = selected_query.single();
-                println!(
-                    "Mouse button release: start {:?} end {:?}",
-                    selected.start.as_ref().map(|s| s.chess_sq),
-                    selected.end.as_ref().map(|s| s.chess_sq)
-                );
+                selected.end = Some(found_selected);
             }
         }
     }
@@ -347,17 +539,17 @@ fn handle_chess_move(
     mut piece_q: Query<(Entity, &mut PieceComponent, &mut Transform), With<PieceComponent>>,
 ) {
     let mut selected = selected_q.single_mut();
+    let en_passant = selected.as_ref().en_passant.as_ref();
     if let (Some(start), Some(end)) = (selected.start.as_ref(), selected.end.as_ref()) {
         let mut board = board_q.single_mut();
         let m = chess::ChessMove::new(start.chess_sq, end.chess_sq, None);
-        if board.board.legal(m) {
-            board.board = board.board.make_move_new(m);
+        if board.0.legal(m) {
+            board.0 = board.0.make_move_new(m);
             for (entity, mut piece, mut transform) in piece_q.iter_mut() {
-                if piece.position == end.position {
+                let normal_capture = piece.position == end.position;
+                let en_passant_capture = en_passant.map_or(false, |e| e.position == piece.position);
+                if normal_capture || en_passant_capture {
                     commands.entity(entity).despawn();
-                }
-                if let Some(en_passant) = board.board.en_passant() {
-                    println!("en_passant: {:?}", en_passant);
                 }
                 if piece.position == start.position {
                     *transform = Transform {
@@ -374,6 +566,7 @@ fn handle_chess_move(
         // Reset selecting after handled
         selected.start = None;
         selected.end = None;
+        selected.en_passant = None;
     }
 }
 
