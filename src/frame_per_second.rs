@@ -47,6 +47,7 @@ impl Default for ScreenDiagsState {
     }
 }
 
+#[allow(dead_code)]
 impl ScreenDiagsState {
     /// Enable the FPS display.
     pub fn enable(&mut self) {

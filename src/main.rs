@@ -62,6 +62,14 @@ struct SelectingSquares {
     en_passant: Option<SquareComponent>,
 }
 
+impl SelectingSquares {
+    fn reset(&mut self) {
+        self.start = None;
+        self.end = None;
+        self.en_passant = None;
+    }
+}
+
 #[derive(Debug, Component)]
 struct SelectingStartSquare;
 
@@ -564,9 +572,7 @@ fn handle_chess_move(
         }
 
         // Reset selecting after handled
-        selected.start = None;
-        selected.end = None;
-        selected.en_passant = None;
+        selected.reset();
     }
 }
 
