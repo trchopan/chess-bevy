@@ -59,7 +59,19 @@ struct SquareComponent {
 struct SelectingSquares {
     start: Option<SquareComponent>,
     end: Option<SquareComponent>,
-    en_passant: Option<SquareComponent>,
+    en_passant: Option<SquareComponent>, // The en_passant pawn to be taken
+    castle: Option<SquareComponent>,     // The castled rook
+}
+
+impl Default for SelectingSquares {
+    fn default() -> Self {
+        Self {
+            start: None,
+            end: None,
+            en_passant: None,
+            castle: None,
+        }
+    }
 }
 
 impl SelectingSquares {
@@ -67,6 +79,7 @@ impl SelectingSquares {
         self.start = None;
         self.end = None;
         self.en_passant = None;
+        self.castle = None;
     }
 }
 
@@ -368,11 +381,7 @@ fn spawn_pieces(mut commands: Commands, pieces: Res<ChessPieceSprites>, windows:
     commands
         .spawn()
         .insert(Name::new("SelectingSquares"))
-        .insert(SelectingSquares {
-            start: None,
-            end: None,
-            en_passant: None,
-        });
+        .insert(SelectingSquares::default());
 
     let spawn_selecting_square = |color: Color| SpriteBundle {
         visibility: Visibility { is_visible: false },
@@ -455,11 +464,11 @@ fn mouse_select_system(
         return;
     }
 
+    let position = position.unwrap();
     let board = board_q.single();
 
     for ev in mousebtn_evr.iter() {
         if ev.state == ButtonState::Pressed {
-            let position = position.unwrap();
             let found_selected = square_query
                 .iter()
                 .find(|&sq| {
@@ -505,6 +514,7 @@ fn mouse_select_system(
                         }
                     }
                 }
+                // if found_selected.position board.0.legal(m)
                 selected.end = Some(found_selected);
             }
         }
